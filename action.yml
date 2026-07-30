@@ -20,9 +20,30 @@ runs:
         echo "{}" > terraform.tfvars.json
 
         for VAR in $(env | grep '_outputs=' | cut -d= -f1); do
-          SECRET_VALUE="${!VAR}"
-          DECODED=$(echo "$SECRET_VALUE" | base64 -d | base64 -d)
-          PROCESSED=$(echo "$DECODED" | jq 'with_entries(.value = .value.value)')
-          jq -s '.[0] * .[1]' terraform.tfvars.json <(echo "$PROCESSED") > merged.json
+          SECRET_VALUE="${!VAR:-}"
+
+          if [ -z "$SECRET_VALUE" ]; then
+            continue
+          fi
+
+          DECODED="$SECRET_VALUE"
+
+          if printf '%s' "$SECRET_VALUE" | base64 -d >/dev/null 2>&1; then
+            ONCE=$(printf '%s' "$SECRET_VALUE" | base64 -d 2>/dev/null || true)
+
+            if printf '%s' "$ONCE" | base64 -d >/dev/null 2>&1; then
+              DECODED=$(printf '%s' "$ONCE" | base64 -d 2>/dev/null || true)
+            else
+              DECODED="$ONCE"
+            fi
+          fi
+
+          if ! printf '%s' "$DECODED" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            echo "Skipping $VAR: value is not a JSON object after decode"
+            continue
+          fi
+
+          PROCESSED=$(printf '%s' "$DECODED" | jq 'with_entries(.value = (.value.value // .value))')
+          jq -s '.[0] * .[1]' terraform.tfvars.json <(printf '%s' "$PROCESSED") > merged.json
           mv merged.json terraform.tfvars.json
         done
